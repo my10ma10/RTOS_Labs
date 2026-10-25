@@ -1,8 +1,8 @@
 #pragma once
-#include "defines.h"
 
-namespace rwoperations
-{
-    int read(int fd, Buffer &buf, size_t size);
-    int write(int fd, Buffer &buf, size_t size);
+#include <cstddef>
+
+namespace rwoperations {
+bool readExact(int fd, void *data, size_t size);
+bool writeExact(int fd, const void *data, size_t size);
 } // namespace rwoperations

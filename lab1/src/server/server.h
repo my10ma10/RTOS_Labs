@@ -1,26 +1,28 @@
 #pragma once
-#include <queue>
-#include <sys/un.h>
+
 #include "defines.h"
+#include <sys/un.h>
 
 class Server
 {
 public:
     Server();
+    ~Server();
+
+    Server(const Server &) = delete;
+    Server &operator=(const Server &) = delete;
 
     void bind();
     void listen();
     int accept();
-
-    Request readRequest() const;
-    void writeResponse(const Response &response);
+    void run();
 
 private:
-    void process();
+    void handleClient(int client_fd);
+    bool sendResponse(int client_fd, int32_t status, const char *text, uint32_t text_size);
 
-private:
-    struct sockaddr_un m_server_addr{};
+    struct sockaddr_un m_server_addr
+    {};
     int m_socket_fd = -1;
-
-    std::priority_queue<Request> m_queue;
+    bool m_bound = false;
 };

@@ -1,24 +1,18 @@
 #include "server.h"
+#include <exception>
 #include <iostream>
-#include <unistd.h>
-#include "rwoperations.h"
 
 int main()
 {
-    Server server;
-
-    server.bind();
-    server.listen();
-    int listen_fd = server.accept();
-
-    Buffer buf;
-    int read_n;
-    while ((read_n = rwoperations::read(listen_fd, buf, BUF_SIZE)) > 0)
-    {
-        if (rwoperations::write(STDOUT_FILENO, buf, read_n) != read_n)
-        {
-            std::clog << "server: cannot print to stdout" << std::endl;
-        }
+    try {
+        Server server;
+        server.bind();
+        server.listen();
+        server.run();
+    } catch (const std::exception &error) {
+        std::cerr << error.what() << std::endl;
+        return 1;
     }
+
     return 0;
 }

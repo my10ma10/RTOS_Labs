@@ -1,25 +1,23 @@
 #pragma once
 
-#include <optional>
-#include <any>
-#include <array>
+#include <cstdint>
 
-#define BACKLOG 5
-#define SV_SOCK_PATH "/tmp/uds_file"
+inline constexpr int BACKLOG = 5;
+inline constexpr char SV_SOCK_PATH[] = "/tmp/uds_file";
+inline constexpr uint32_t MAX_MESSAGE_SIZE = 4096;
 
-#define BUF_SIZE 1024
-
-using Buffer = std::array<char, BUF_SIZE>;
+enum class Command : uint32_t { Text = 1 };
 
 struct Request
 {
-    int priority; // приоритет клиента
-    int command;  // тип команды
-    int value;    // данные
+    uint32_t priority;
+    Command command;
+    int32_t value;
+    uint32_t text_size;
 };
 
 struct Response
 {
-    int status;
-    std::optional<std::any> result = std::nullopt;
+    int32_t status;
+    uint32_t text_size;
 };

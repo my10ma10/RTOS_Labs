@@ -1,21 +1,22 @@
 #include "client.h"
-#include "rwoperations.h"
+#include <exception>
 #include <iostream>
-#include <unistd.h>
+#include <string>
 
 int main()
 {
-    Client client;
-    client.connect();
+    try {
+        Client client;
+        client.connect();
 
-    Buffer buf;
-    int read_n;
-    while ((read_n = rwoperations::read(STDIN_FILENO, buf, BUF_SIZE)) > 0)
-    {
-        if (rwoperations::write(client.socketFd(), buf, read_n) != read_n)
-        {
-            std::clog << "client: cannot print to stdout" << std::endl;
+        std::string text;
+        while (std::getline(std::cin, text)) {
+            std::cout << client.transact(text) << std::endl;
         }
+    } catch (const std::exception &error) {
+        std::cerr << error.what() << std::endl;
+        return 1;
     }
+
     return 0;
 }
