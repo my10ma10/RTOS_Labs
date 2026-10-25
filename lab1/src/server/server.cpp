@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <utility>
 
@@ -28,6 +29,13 @@ Server::~Server()
     m_request_queue.stop();
     if (m_worker.joinable()) {
         m_worker.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        for (const auto &entry : m_event_fds) {
+            ::close(entry.second);
+        }
+        m_event_fds.clear();
     }
     if (m_socket_fd != -1) {
         ::close(m_socket_fd);
@@ -67,6 +75,93 @@ int Server::accept()
     return client_fd;
 }
 
+int Server::receiveEventFd(int client_fd)
+{
+    char marker = 0;
+    iovec data{};
+    data.iov_base = &marker;
+    data.iov_len = sizeof(marker);
+
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
+    msghdr message{};
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+
+    ssize_t received;
+    do {
+        received = ::recvmsg(client_fd, &message, MSG_CMSG_CLOEXEC);
+    } while (received == -1 && errno == EINTR);
+
+    int event_fd = -1;
+    for (cmsghdr *header = CMSG_FIRSTHDR(&message); header != nullptr;
+         header = CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS
+            && header->cmsg_len >= CMSG_LEN(sizeof(int))) {
+            std::memcpy(&event_fd, CMSG_DATA(header), sizeof(event_fd));
+            break;
+        }
+    }
+
+    if (received != 1 || marker != EVENTFD_REGISTRATION || (message.msg_flags & MSG_CTRUNC)
+        || event_fd == -1) {
+        if (event_fd != -1) {
+            ::close(event_fd);
+        }
+        return -1;
+    }
+
+    return event_fd;
+}
+
+void Server::registerEventFd(int client_fd, int event_fd)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        m_event_fds.emplace(client_fd, event_fd);
+    }
+    logEvent("eventfd registered fd=" + std::to_string(client_fd));
+}
+
+void Server::unregisterEventFd(int client_fd)
+{
+    int event_fd = -1;
+    {
+        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        auto it = m_event_fds.find(client_fd);
+        if (it != m_event_fds.end()) {
+            event_fd = it->second;
+            m_event_fds.erase(it);
+        }
+    }
+    if (event_fd != -1) {
+        ::close(event_fd);
+    }
+}
+
+size_t Server::notifyClients()
+{
+    const uint64_t value = 1;
+    size_t notified = 0;
+    std::lock_guard<std::mutex> lock(m_clients_mutex);
+
+    for (const auto &entry : m_event_fds) {
+        ssize_t written;
+        do {
+            written = ::write(entry.second, &value, sizeof(value));
+        } while (written == -1 && errno == EINTR);
+
+        if (written == static_cast<ssize_t>(sizeof(value))) {
+            ++notified;
+        } else {
+            logEvent("eventfd notification failed fd=" + std::to_string(entry.first));
+        }
+    }
+
+    return notified;
+}
+
 bool Server::sendResponse(int client_fd, int32_t status, const char *text, uint32_t text_size)
 {
     Response response{status, text_size};
@@ -77,11 +172,18 @@ bool Server::sendResponse(int client_fd, int32_t status, const char *text, uint3
 void Server::logEvent(const std::string &message)
 {
     std::lock_guard<std::mutex> lock(m_log_mutex);
-    std::cout << "[SERVER]: " << message << std::endl;
+    std::cout << message << std::endl;
 }
 
 void Server::handleClient(int client_fd)
 {
+    int event_fd = receiveEventFd(client_fd);
+    if (event_fd == -1) {
+        logEvent("eventfd registration failed fd=" + std::to_string(client_fd));
+        ::close(client_fd);
+        return;
+    }
+    registerEventFd(client_fd, event_fd);
     logEvent("client connected fd=" + std::to_string(client_fd));
 
     while (true) {
@@ -122,6 +224,7 @@ void Server::handleClient(int client_fd)
             + " sequence=" + std::to_string(queued_request->sequence));
     }
 
+    unregisterEventFd(client_fd);
     ::close(client_fd);
     logEvent("client disconnected fd=" + std::to_string(client_fd));
 }
@@ -143,6 +246,8 @@ void Server::processQueue()
         if (queued_request->request.command == Command::Text) {
             reply.status = 0;
             reply.text = "Confirm: server received: " + queued_request->text;
+            size_t notified = notifyClients();
+            logEvent("async notification sent to " + std::to_string(notified) + " client(s)");
         } else {
             reply.status = -1;
             reply.text = "Unsupported command";

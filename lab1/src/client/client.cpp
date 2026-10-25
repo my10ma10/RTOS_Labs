@@ -1,8 +1,11 @@
 #include "client.h"
 #include "rwoperations.h"
+#include <cerrno>
 #include <cstring>
 #include <stdexcept>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 Client::Client(uint32_t priority)
@@ -12,10 +15,20 @@ Client::Client(uint32_t priority)
     if (m_socket_fd == -1) {
         throw std::runtime_error("client: socket creation failed");
     }
+
+    m_event_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (m_event_fd == -1) {
+        ::close(m_socket_fd);
+        m_socket_fd = -1;
+        throw std::runtime_error("client: eventfd creation failed");
+    }
 }
 
 Client::~Client()
 {
+    if (m_event_fd != -1) {
+        ::close(m_event_fd);
+    }
     if (m_socket_fd != -1) {
         ::close(m_socket_fd);
     }
@@ -30,6 +43,33 @@ void Client::connect()
     if (::connect(m_socket_fd, reinterpret_cast<sockaddr *>(&m_client_addr), sizeof(m_client_addr))
         == -1) {
         throw std::runtime_error(std::string("client: cannot connect ") + SV_SOCK_PATH);
+    }
+
+    char marker = EVENTFD_REGISTRATION;
+    iovec data{};
+    data.iov_base = &marker;
+    data.iov_len = sizeof(marker);
+
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
+    msghdr message{};
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+
+    cmsghdr *header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int));
+    std::memcpy(CMSG_DATA(header), &m_event_fd, sizeof(m_event_fd));
+
+    ssize_t sent;
+    do {
+        sent = ::sendmsg(m_socket_fd, &message, 0);
+    } while (sent == -1 && errno == EINTR);
+
+    if (sent != static_cast<ssize_t>(sizeof(marker))) {
+        throw std::runtime_error("client: cannot send eventfd to server");
     }
 }
 
@@ -61,4 +101,9 @@ std::string Client::transact(std::string_view text)
     }
 
     return reply;
+}
+
+int Client::eventFd() const
+{
+    return m_event_fd;
 }
