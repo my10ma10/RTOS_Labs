@@ -11,8 +11,9 @@
 #include <unistd.h>
 #include <utility>
 
-Server::Server()
-    : m_notification_scheduler([this](int client_fd, bool success) {
+Server::Server(std::chrono::milliseconds processing_delay)
+    : m_processing_delay(processing_delay)
+    , m_notification_scheduler([this](int client_fd, bool success) {
         if (success) {
             logEvent("timer notification sent fd=" + std::to_string(client_fd));
         } else {
@@ -289,11 +290,18 @@ void Server::processQueue()
             reply.text = "Unsupported command";
         }
         queued_request->completion.set_value(std::move(reply));
+
+        if (m_processing_delay.count() > 0) {
+            std::this_thread::sleep_for(m_processing_delay);
+        }
     }
 }
 
 void Server::run()
 {
+    if (m_processing_delay.count() > 0) {
+        logEvent("test processing delay=" + std::to_string(m_processing_delay.count()) + "ms");
+    }
     m_worker = std::thread(&Server::processQueue, this);
 
     while (true) {

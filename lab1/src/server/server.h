@@ -3,6 +3,7 @@
 #include "defines.h"
 #include "notification_scheduler.h"
 #include "priority_request_queue.h"
+#include <chrono>
 #include <cstddef>
 #include <mutex>
 #include <string>
@@ -13,7 +14,7 @@
 class Server
 {
 public:
-    Server();
+    explicit Server(std::chrono::milliseconds processing_delay = std::chrono::milliseconds{0});
     ~Server();
 
     Server(const Server &) = delete;
@@ -29,16 +30,17 @@ private:
     void registerEventFd(int client_fd, int event_fd);
     void unregisterEventFd(int client_fd);
     size_t notifyClients();
-
     bool scheduleTimer(int client_fd, int32_t seconds);
     void handleClient(int client_fd);
     void processQueue();
     void logEvent(const std::string &message);
     bool sendResponse(int client_fd, int32_t status, const char *text, uint32_t text_size);
 
-    struct sockaddr_un m_server_addr{};
+    struct sockaddr_un m_server_addr
+    {};
     int m_socket_fd = -1;
     bool m_bound = false;
+    std::chrono::milliseconds m_processing_delay;
     PriorityRequestQueue m_request_queue;
 
     std::unordered_map<int, int> m_event_fds;
