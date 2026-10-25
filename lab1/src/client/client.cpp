@@ -5,7 +5,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-Client::Client()
+Client::Client(uint32_t priority)
+    : m_priority(priority)
 {
     m_socket_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (m_socket_fd == -1) {
@@ -38,7 +39,7 @@ std::string Client::transact(std::string_view text)
         throw std::runtime_error("client: message is too long");
     }
 
-    Request request{0, Command::Text, 0, static_cast<uint32_t>(text.size())};
+    Request request{m_priority, Command::Text, 0, static_cast<uint32_t>(text.size())};
     if (!rwoperations::writeExact(m_socket_fd, &request, sizeof(request))
         || !rwoperations::writeExact(m_socket_fd, text.data(), text.size())) {
         throw std::runtime_error("client: cannot send request");

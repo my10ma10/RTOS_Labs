@@ -8,7 +8,7 @@
 class Client
 {
 public:
-    Client();
+    explicit Client(uint32_t priority = 0);
     ~Client();
 
     Client(const Client &) = delete;
@@ -21,4 +21,5 @@ private:
     struct sockaddr_un m_client_addr
     {};
     int m_socket_fd = -1;
+    uint32_t m_priority;
 };

@@ -2,10 +2,12 @@
 #include "rwoperations.h"
 #include <cerrno>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <utility>
 
 Server::Server()
 {
@@ -23,6 +25,10 @@ Server::Server()
 
 Server::~Server()
 {
+    m_request_queue.stop();
+    if (m_worker.joinable()) {
+        m_worker.join();
+    }
     if (m_socket_fd != -1) {
         ::close(m_socket_fd);
     }
@@ -68,8 +74,16 @@ bool Server::sendResponse(int client_fd, int32_t status, const char *text, uint3
            && rwoperations::writeExact(client_fd, text, text_size);
 }
 
+void Server::logEvent(const std::string &message)
+{
+    std::lock_guard<std::mutex> lock(m_log_mutex);
+    std::cout << "[SERVER]: " << message << std::endl;
+}
+
 void Server::handleClient(int client_fd)
 {
+    logEvent("client connected fd=" + std::to_string(client_fd));
+
     while (true) {
         Request request{};
         if (!rwoperations::readExact(client_fd, &request, sizeof(request))) {
@@ -77,38 +91,76 @@ void Server::handleClient(int client_fd)
         }
 
         if (request.text_size > MAX_MESSAGE_SIZE) {
+            logEvent("invalid request from fd=" + std::to_string(client_fd));
             break;
         }
 
         std::string text(request.text_size, '\0');
         if (!rwoperations::readExact(client_fd, text.data(), text.size())) {
+            logEvent("incomplete request from fd=" + std::to_string(client_fd));
             break;
         }
 
-        if (request.command != Command::Text) {
-            const std::string error = "Unsupported command";
-            if (!sendResponse(client_fd, -1, error.data(), static_cast<uint32_t>(error.size()))) {
-                break;
-            }
-            continue;
-        }
+        auto queued_request = m_request_queue.enqueue(client_fd, request, std::move(text));
+        auto result = queued_request->completion.get_future();
+        logEvent(
+            "queued request fd=" + std::to_string(client_fd)
+            + " priority=" + std::to_string(request.priority)
+            + " sequence=" + std::to_string(queued_request->sequence));
 
-        const std::string reply = "Server received: " + text;
-        if (!sendResponse(client_fd, 0, reply.data(), static_cast<uint32_t>(reply.size()))) {
+        RequestReply reply = result.get();
+        if (!sendResponse(
+                client_fd,
+                reply.status,
+                reply.text.data(),
+                static_cast<uint32_t>(reply.text.size()))) {
+            logEvent("response failed fd=" + std::to_string(client_fd));
             break;
         }
+        logEvent(
+            "response sent fd=" + std::to_string(client_fd)
+            + " sequence=" + std::to_string(queued_request->sequence));
+    }
+
+    ::close(client_fd);
+    logEvent("client disconnected fd=" + std::to_string(client_fd));
+}
+
+void Server::processQueue()
+{
+    while (true) {
+        auto queued_request = m_request_queue.waitAndPop();
+        if (!queued_request) {
+            return;
+        }
+
+        logEvent(
+            "processing request fd=" + std::to_string(queued_request->client_fd)
+            + " priority=" + std::to_string(queued_request->request.priority)
+            + " sequence=" + std::to_string(queued_request->sequence));
+
+        RequestReply reply{};
+        if (queued_request->request.command == Command::Text) {
+            reply.status = 0;
+            reply.text = "Confirm: server received: " + queued_request->text;
+        } else {
+            reply.status = -1;
+            reply.text = "Unsupported command";
+        }
+        queued_request->completion.set_value(std::move(reply));
     }
 }
 
 void Server::run()
 {
+    m_worker = std::thread(&Server::processQueue, this);
+
     while (true) {
         int client_fd = accept();
         if (client_fd == -1) {
             throw std::runtime_error("server: accept failed");
         }
 
-        handleClient(client_fd);
-        ::close(client_fd);
+        std::thread(&Server::handleClient, this, client_fd).detach();
     }
 }
