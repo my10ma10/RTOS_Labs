@@ -7,7 +7,7 @@ inline constexpr char SV_SOCK_PATH[] = "/tmp/uds_file";
 inline constexpr uint32_t MAX_MESSAGE_SIZE = 4096;
 inline constexpr char EVENTFD_REGISTRATION = 'E';
 
-enum class Command : uint32_t { Text = 1 };
+enum class Command : uint32_t { Text = 1, Timer = 2 };
 
 struct Request
 {

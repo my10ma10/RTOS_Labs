@@ -2,6 +2,7 @@
 #include "rwoperations.h"
 #include <cerrno>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -75,11 +76,24 @@ void Client::connect()
 
 std::string Client::transact(std::string_view text)
 {
+    return transact(Command::Text, 0, text);
+}
+
+std::string Client::scheduleTimer(uint32_t seconds)
+{
+    if (seconds > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
+        throw std::runtime_error("client: timer delay is too large");
+    }
+    return transact(Command::Timer, static_cast<int32_t>(seconds), {});
+}
+
+std::string Client::transact(Command command, int32_t value, std::string_view text)
+{
     if (text.size() > MAX_MESSAGE_SIZE) {
         throw std::runtime_error("client: message is too long");
     }
 
-    Request request{m_priority, Command::Text, 0, static_cast<uint32_t>(text.size())};
+    Request request{m_priority, command, value, static_cast<uint32_t>(text.size())};
     if (!rwoperations::writeExact(m_socket_fd, &request, sizeof(request))
         || !rwoperations::writeExact(m_socket_fd, text.data(), text.size())) {
         throw std::runtime_error("client: cannot send request");

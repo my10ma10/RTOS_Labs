@@ -8,6 +8,8 @@ add_executable(server
     server/server.cpp
     server/priority_request_queue.h
     server/priority_request_queue.cpp
+    server/notification_scheduler.h
+    server/notification_scheduler.cpp
     server/main.cpp
 )
 target_link_libraries(server

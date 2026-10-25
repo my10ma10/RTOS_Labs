@@ -1,6 +1,7 @@
 #include "server.h"
 #include "rwoperations.h"
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +12,13 @@
 #include <utility>
 
 Server::Server()
+    : m_notification_scheduler([this](int client_fd, bool success) {
+        if (success) {
+            logEvent("timer notification sent fd=" + std::to_string(client_fd));
+        } else {
+            logEvent("timer notification failed fd=" + std::to_string(client_fd));
+        }
+    })
 {
     m_socket_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (m_socket_fd == -1) {
@@ -30,6 +38,7 @@ Server::~Server()
     if (m_worker.joinable()) {
         m_worker.join();
     }
+    m_notification_scheduler.stop();
     {
         std::lock_guard<std::mutex> lock(m_clients_mutex);
         for (const auto &entry : m_event_fds) {
@@ -162,6 +171,17 @@ size_t Server::notifyClients()
     return notified;
 }
 
+bool Server::scheduleTimer(int client_fd, int32_t seconds)
+{
+    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    auto it = m_event_fds.find(client_fd);
+    if (it == m_event_fds.end()) {
+        return false;
+    }
+
+    return m_notification_scheduler.schedule(it->second, client_fd, std::chrono::seconds(seconds));
+}
+
 bool Server::sendResponse(int client_fd, int32_t status, const char *text, uint32_t text_size)
 {
     Response response{status, text_size};
@@ -248,6 +268,22 @@ void Server::processQueue()
             reply.text = "Confirm: server received: " + queued_request->text;
             size_t notified = notifyClients();
             logEvent("async notification sent to " + std::to_string(notified) + " client(s)");
+        } else if (queued_request->request.command == Command::Timer) {
+            if (queued_request->request.value < 0) {
+                reply.status = -1;
+                reply.text = "Timer delay must be nonnegative";
+            } else if (scheduleTimer(queued_request->client_fd, queued_request->request.value)) {
+                reply.status = 0;
+                reply.text = "Timer scheduled for " + std::to_string(queued_request->request.value)
+                             + " second(s)";
+                logEvent(
+                    "timer scheduled fd=" + std::to_string(queued_request->client_fd)
+                    + " delay=" + std::to_string(queued_request->request.value)
+                    + "s sequence=" + std::to_string(queued_request->sequence));
+            } else {
+                reply.status = -1;
+                reply.text = "Cannot schedule timer for disconnected client";
+            }
         } else {
             reply.status = -1;
             reply.text = "Unsupported command";

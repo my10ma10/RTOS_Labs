@@ -17,6 +17,18 @@ void sendLine(Client &client, std::string line)
     if (!line.empty() && line.back() == '\r') {
         line.pop_back();
     }
+
+    if (line.rfind(":timer ", 0) == 0) {
+        const std::string value_text = line.substr(7);
+        size_t parsed = 0;
+        unsigned long value = std::stoul(value_text, &parsed);
+        if (parsed != value_text.size() || value > std::numeric_limits<int32_t>::max()) {
+            throw std::invalid_argument("usage: :timer <seconds>");
+        }
+        std::cout << client.scheduleTimer(static_cast<uint32_t>(value)) << std::endl;
+        return;
+    }
+
     std::cout << client.transact(line) << std::endl;
 }
 

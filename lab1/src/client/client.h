@@ -16,11 +16,13 @@ public:
 
     void connect();
     std::string transact(std::string_view text);
+    std::string scheduleTimer(uint32_t seconds);
     int eventFd() const;
 
 private:
-    struct sockaddr_un m_client_addr
-    {};
+    std::string transact(Command command, int32_t value, std::string_view text);
+
+    struct sockaddr_un m_client_addr{};
     int m_socket_fd = -1;
     int m_event_fd = -1;
     uint32_t m_priority;
